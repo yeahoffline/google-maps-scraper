@@ -12,8 +12,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gosom/google-maps-scraper/deduper"
-	"github.com/gosom/google-maps-scraper/exiter"
 	"github.com/gosom/google-maps-scraper/runner"
 	"github.com/gosom/google-maps-scraper/tlmt"
 	"github.com/gosom/google-maps-scraper/web"
@@ -50,7 +48,7 @@ func New(cfg *runner.Config) (runner.Runner, error) {
 
 	svc := web.NewService(repo, cfg.DataFolder)
 
-	srv, err := web.New(svc, cfg.Addr)
+	srv, err := web.New(svc)
 	if err != nil {
 		return nil, err
 	}
@@ -78,7 +76,26 @@ func (w *webrunner) Run(ctx context.Context) error {
 	return egroup.Wait()
 }
 
-func (w *webrunner) Close(context.Context) error {
+func (w *webrunner) Close(ctx context.Context) error {
+	var errs []error
+	
+	// Close the server if it exists
+	if w.srv != nil {
+		if err := w.srv.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("failed to close server: %w", err))
+		}
+	}
+
+	// Close the service if it exists
+	if w.svc != nil {
+		if err := w.svc.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("failed to close service: %w", err))
+		}
+	}
+
+	if len(errs) > 0 {
+		return fmt.Errorf("errors during cleanup: %v", errs)
+	}
 	return nil
 }
 
@@ -133,85 +150,73 @@ func (w *webrunner) work(ctx context.Context) error {
 func (w *webrunner) scrapeJob(ctx context.Context, job *web.Job) error {
 	job.Status = web.StatusWorking
 
-	err := w.svc.Update(ctx, job)
-	if err != nil {
-		return err
+	if err := w.svc.Update(ctx, job); err != nil {
+		return fmt.Errorf("failed to update job status: %w", err)
 	}
 
 	if len(job.Data.Keywords) == 0 {
 		job.Status = web.StatusFailed
-
 		return w.svc.Update(ctx, job)
 	}
 
 	outpath := filepath.Join(w.cfg.DataFolder, job.ID+".csv")
-
 	outfile, err := os.Create(outpath)
 	if err != nil {
-		return err
+		job.Status = web.StatusFailed
+		if updateErr := w.svc.Update(ctx, job); updateErr != nil {
+			return fmt.Errorf("failed to create output file: %v and update status: %v", err, updateErr)
+		}
+		return fmt.Errorf("failed to create output file: %w", err)
 	}
-
 	defer func() {
-		_ = outfile.Close()
+		if closeErr := outfile.Close(); closeErr != nil {
+			log.Printf("error closing output file: %v", closeErr)
+		}
 	}()
 
-	mate, err := w.setupMate(ctx, outfile, job)
+	mate, err := w.setupMate(ctx, outfile)
 	if err != nil {
 		job.Status = web.StatusFailed
-
-		err2 := w.svc.Update(ctx, job)
-		if err2 != nil {
-			log.Printf("failed to update job status: %v", err2)
+		if updateErr := w.svc.Update(ctx, job); updateErr != nil {
+			return fmt.Errorf("failed to setup mate: %v and update status: %v", err, updateErr)
 		}
-
-		return err
+		return fmt.Errorf("failed to setup mate: %w", err)
 	}
-
-	defer mate.Close()
+	
+	// Ensure mate is always closed
+	defer func() {
+		if mate != nil {
+			mate.Close()
+		}
+	}()
 
 	var coords string
 	if job.Data.Lat != "" && job.Data.Lon != "" {
 		coords = job.Data.Lat + "," + job.Data.Lon
 	}
 
-	dedup := deduper.New()
-	exitMonitor := exiter.New()
-
 	seedJobs, err := runner.CreateSeedJobs(
-		job.Data.FastMode,
 		job.Data.Lang,
 		strings.NewReader(strings.Join(job.Data.Keywords, "\n")),
 		job.Data.Depth,
 		job.Data.Email,
 		coords,
 		job.Data.Zoom,
-		func() float64 {
-			if job.Data.Radius <= 0 {
-				return 10000 // 10 km
-			}
-
-			return float64(job.Data.Radius)
-		}(),
-		dedup,
-		exitMonitor,
 	)
 	if err != nil {
-		err2 := w.svc.Update(ctx, job)
-		if err2 != nil {
-			log.Printf("failed to update job status: %v", err2)
+		job.Status = web.StatusFailed
+		if updateErr := w.svc.Update(ctx, job); updateErr != nil {
+			return fmt.Errorf("failed to create seed jobs: %v and update status: %v", err, updateErr)
 		}
-
-		return err
+		return fmt.Errorf("failed to create seed jobs: %w", err)
 	}
 
 	if len(seedJobs) > 0 {
-		exitMonitor.SetSeedCount(len(seedJobs))
-
 		allowedSeconds := max(60, len(seedJobs)*10*job.Data.Depth/50+120)
 
 		if job.Data.MaxTime > 0 {
-			if job.Data.MaxTime.Seconds() < 180 {
-				allowedSeconds = 180
+			if job.Data.MaxTime.Seconds() < 60 {
+				allowedSeconds = 60
 			} else {
 				allowedSeconds = int(job.Data.MaxTime.Seconds())
 			}
@@ -222,70 +227,39 @@ func (w *webrunner) scrapeJob(ctx context.Context, job *web.Job) error {
 		mateCtx, cancel := context.WithTimeout(ctx, time.Duration(allowedSeconds)*time.Second)
 		defer cancel()
 
-		exitMonitor.SetCancelFunc(cancel)
-
-		go exitMonitor.Run(mateCtx)
-
 		err = mate.Start(mateCtx, seedJobs...)
-		if err != nil && !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
-			cancel()
-
-			err2 := w.svc.Update(ctx, job)
-			if err2 != nil {
-				log.Printf("failed to update job status: %v", err2)
+		if err != nil && !errors.Is(err, context.DeadlineExceeded) {
+			job.Status = web.StatusFailed
+			if updateErr := w.svc.Update(ctx, job); updateErr != nil {
+				return fmt.Errorf("failed to run mate: %v and update status: %v", err, updateErr)
 			}
-
-			return err
+			return fmt.Errorf("failed to run mate: %w", err)
 		}
-
-		cancel()
 	}
 
-	mate.Close()
-
 	job.Status = web.StatusOK
-
 	return w.svc.Update(ctx, job)
 }
 
-func (w *webrunner) setupMate(_ context.Context, writer io.Writer, job *web.Job) (*scrapemateapp.ScrapemateApp, error) {
+func (w *webrunner) setupMate(ctx context.Context, writer io.Writer) (*scrapemateapp.ScrapeMateApp, error) {
 	opts := []func(*scrapemateapp.Config) error{
 		scrapemateapp.WithConcurrency(w.cfg.Concurrency),
-		scrapemateapp.WithExitOnInactivity(time.Minute * 3),
+		scrapemateapp.WithJS(scrapemateapp.DisableImages()),
+		scrapemateapp.WithExitOnInactivity(w.cfg.ExitOnInactivityDuration),
+		scrapemateapp.WithJS(scrapemateapp.WithBrowserCleanupTimeout(time.Second * 5)),
+		scrapemateapp.WithJS(scrapemateapp.WithForceCleanup()),
+		scrapemateapp.WithJS(scrapemateapp.WithNavigationTimeout(time.Second * 12)),
+		scrapemateapp.WithJS(scrapemateapp.WithBrowserArgs([]string{
+			"--disable-dev-shm-usage",
+			"--disable-gpu",
+			"--no-sandbox",
+			"--js-flags=--max-old-space-size=512",
+		})),
 	}
-
-	if !job.Data.FastMode {
-		opts = append(opts,
-			scrapemateapp.WithJS(scrapemateapp.DisableImages()),
-		)
-	} else {
-		opts = append(opts,
-			scrapemateapp.WithStealth("firefox"),
-		)
-	}
-
-	hasProxy := false
-
-	if len(w.cfg.Proxies) > 0 {
-		opts = append(opts, scrapemateapp.WithProxies(w.cfg.Proxies))
-		hasProxy = true
-	} else if len(job.Data.Proxies) > 0 {
-		opts = append(opts,
-			scrapemateapp.WithProxies(job.Data.Proxies),
-		)
-		hasProxy = true
-	}
-
-	if !w.cfg.DisablePageReuse {
-		opts = append(opts,
-			scrapemateapp.WithPageReuseLimit(2),
-			scrapemateapp.WithPageReuseLimit(200),
-		)
-	}
-
-	log.Printf("job %s has proxy: %v", job.ID, hasProxy)
 
 	csvWriter := csvwriter.NewCsvWriter(csv.NewWriter(writer))
+	// Ensure writer is flushed after each write
+	csvWriter.AutoFlush(true)
 
 	writers := []scrapemate.ResultWriter{csvWriter}
 
@@ -294,8 +268,21 @@ func (w *webrunner) setupMate(_ context.Context, writer io.Writer, job *web.Job)
 		opts...,
 	)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to create scrapemate config: %w", err)
 	}
 
-	return scrapemateapp.NewScrapeMateApp(matecfg)
+	app, err := scrapemateapp.NewScrapeMateApp(matecfg)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create scrapemate app: %w", err)
+	}
+
+	// Add cleanup on context cancellation
+	go func() {
+		<-ctx.Done()
+		if app != nil {
+			app.Close()
+		}
+	}()
+
+	return app, nil
 }

@@ -163,7 +163,7 @@ func (j *GmapJob) BrowserActions(ctx context.Context, page playwright.Page) scra
 		return resp
 	}
 
-	const defaultTimeout = 5000
+	const defaultTimeout = 3500
 
 	err = page.WaitForURL(page.URL(), playwright.PageWaitForURLOptions{
 		WaitUntil: playwright.WaitUntilStateDomcontentloaded,

@@ -116,7 +116,7 @@ func (j *PlaceJob) BrowserActions(_ context.Context, page playwright.Page) scrap
 		return resp
 	}
 
-	const defaultTimeout = 5000
+	const defaultTimeout = 3500
 
 	err = page.WaitForURL(page.URL(), playwright.PageWaitForURLOptions{
 		WaitUntil: playwright.WaitUntilStateDomcontentloaded,

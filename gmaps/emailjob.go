@@ -2,6 +2,7 @@ package gmaps
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/PuerkitoBio/goquery"
@@ -94,9 +95,9 @@ func (j *EmailExtractJob) ProcessOnFetchError() bool {
 
 func docEmailExtractor(doc *goquery.Document) []string {
 	seen := map[string]bool{}
-
 	var emails []string
 
+	// Check mailto links
 	doc.Find("a[href^='mailto:']").Each(func(_ int, s *goquery.Selection) {
 		mailto, exists := s.Attr("href")
 		if exists {
@@ -110,29 +111,136 @@ func docEmailExtractor(doc *goquery.Document) []string {
 		}
 	})
 
+	// Check text content of elements that commonly contain emails
+	doc.Find("p, div, span, address").Each(func(_ int, s *goquery.Selection) {
+		text := s.Text()
+		if addresses := emailaddress.Find([]byte(text), false); len(addresses) > 0 {
+			for _, addr := range addresses {
+				email := addr.String()
+				if !seen[email] {
+					emails = append(emails, email)
+					seen[email] = true
+				}
+			}
+		}
+	})
+
 	return emails
 }
 
 func regexEmailExtractor(body []byte) []string {
 	seen := map[string]bool{}
-
 	var emails []string
 
-	addresses := emailaddress.Find(body, false)
+	// Use more comprehensive regex pattern
+	addresses := emailaddress.Find(body, true) // Set strict mode to true
 	for i := range addresses {
-		if !seen[addresses[i].String()] {
-			emails = append(emails, addresses[i].String())
-			seen[addresses[i].String()] = true
+		email := addresses[i].String()
+		if !seen[email] {
+			if isValidEmailDomain(email) { // Add domain validation
+				emails = append(emails, email)
+				seen[email] = true
+			}
 		}
 	}
 
 	return emails
 }
 
+// New helper function to validate email domains
+func isValidEmailDomain(email string) bool {
+	parts := strings.Split(email, "@")
+	if len(parts) != 2 {
+		return false
+	}
+	
+	domain := parts[1]
+	
+	// Skip common disposable email domains
+	disposableDomains := map[string]bool{
+		// Testing/Example domains
+		"example.com":     true,
+		"test.com":        true,
+		"sample.com":      true,
+		
+		// Hosting/Website Providers
+		"hostgator.com":   true,
+		"bluehost.com":    true,
+		"godaddy.com":     true,
+		"dreamhost.com":   true,
+		"hostinger.com":   true,
+		"wpengine.com":    true,
+		"digitalocean.com": true,
+		"aws.amazon.com":  true,
+		"azure.com":       true,
+		"herokuapp.com":   true,
+		"netlify.com":     true,
+		"vercel.app":      true,
+		"squarespace.com": true,
+		"wix.com":         true,
+		"wordpress.com":   true,
+		"shopify.com":     true,
+		
+		// Website Builders/CMS
+		"weebly.com":      true,
+		"webflow.com":     true,
+		"myshopify.com":   true,
+		"webnode.com":     true,
+		"jimdo.com":       true,
+		
+		// Temporary/Disposable (previous list)
+		"tempmail.com":    true,
+		"temp-mail.org":   true,
+		"guerrillamail.com": true,
+		"guerrillamail.net": true,
+		"guerrillamail.org": true,
+		"sharklasers.com": true,
+		"10minutemail.com": true,
+		"mailinator.com":  true,
+		"maildrop.cc":     true,
+		"yopmail.com":     true,
+		
+		// Common Support/No-Reply Patterns
+		"no-reply.com":    true,
+		"noreply.com":     true,
+		"donotreply.com":  true,
+		
+		// Common fake/testing
+		"localhost":       true,
+		"localhost.com":   true,
+		"invalid.com":     true,
+		"fake.com":        true,
+		"notreal.com":     true,
+	}
+	
+	if disposableDomains[domain] {
+		return false
+	}
+	
+	// Basic domain validation
+	if !strings.Contains(domain, ".") {
+		return false
+	}
+	
+	return true
+}
+
 func getValidEmail(s string) (string, error) {
-	email, err := emailaddress.Parse(strings.TrimSpace(s))
+	s = strings.TrimSpace(s)
+	s = strings.ToLower(s) // Normalize to lowercase
+	
+	// Remove common noise from emails
+	s = strings.TrimPrefix(s, "mailto:")
+	s = strings.TrimSuffix(s, "?subject=")
+	s = strings.Split(s, "?")[0] // Remove any query parameters
+	
+	email, err := emailaddress.Parse(s)
 	if err != nil {
 		return "", err
+	}
+
+	if !isValidEmailDomain(email.String()) {
+		return "", fmt.Errorf("invalid email domain")
 	}
 
 	return email.String(), nil
