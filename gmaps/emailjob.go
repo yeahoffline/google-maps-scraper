@@ -12,6 +12,7 @@ import (
 	"github.com/gosom/google-maps-scraper/exiter"
 	"github.com/gosom/scrapemate"
 	"github.com/mcnijman/go-emailaddress"
+	"golang.org/x/net/publicsuffix"
 )
 
 type EmailExtractJobOptions func(*EmailExtractJob)
@@ -85,6 +86,9 @@ func (j *EmailExtractJob) Process(ctx context.Context, resp *scrapemate.Response
 	if len(emails) == 0 {
 		emails = regexEmailExtractor(resp.Body)
 	}
+
+	// Filter emails to those relevant to the site's domain or freemail allowlist
+	emails = filterEmailsBySite(j.URL, emails)
 
 	j.Entry.Emails = emails
 
@@ -355,9 +359,9 @@ func deobfuscateEmailsText(s string) string {
 	r := strings.ToLower(s)
 	// Replace bracketed and spaced variants
 	replacements := []struct{ re, sub string }{
-		{re: `\s*\[\s*at\s*\]\s*|\s*\(\s*at\s*\)\s*|\s+at\s+|\s*\{\s*at\s*\}\s*`, sub: "@"},
-		{re: `\s*\[\s*dot\s*\]\s*|\s*\(\s*dot\s*\)\s*|\s+dot\s+|\s*\{\s*dot\s*\}\s*`, sub: "."},
-		{re: `\s*\[\s*d0t\s*\]\s*|\s+d0t\s+`, sub: "."},
+		{re: `\s*\[\s*at\s*\]\s*|\s*\(\s*at\s*\)\s*|\s*\{\s*at\s*\}\s*`, sub: "@"},
+		{re: `\s*\[\s*dot\s*\]\s*|\s*\(\s*dot\s*\)\s*|\s*\{\s*dot\s*\}\s*`, sub: "."},
+		{re: `\s*\[\s*d0t\s*\]\s*|\s*\(\s*d0t\s*\)\s*|\s*\{\s*d0t\s*\}\s*`, sub: "."},
 	}
 	out := r
 	for _, rp := range replacements {
@@ -366,5 +370,76 @@ func deobfuscateEmailsText(s string) string {
 	// remove spaces around @ and .
 	out = regexp.MustCompile(`\s*@\s*`).ReplaceAllString(out, "@")
 	out = regexp.MustCompile(`\s*\.\s*`).ReplaceAllString(out, ".")
+	return out
+}
+
+// getRegistrableDomain returns the eTLD+1 for a given hostname
+func getRegistrableDomain(host string) string {
+	host = strings.ToLower(strings.TrimSpace(host))
+	if host == "" {
+		return ""
+	}
+	if strings.Contains(host, "://") {
+		if u, err := url.Parse(host); err == nil {
+			host = u.Hostname()
+		}
+	}
+	d, err := publicsuffix.EffectiveTLDPlusOne(host)
+	if err != nil {
+		return host
+	}
+	return d
+}
+
+// filterEmailsBySite keeps emails that belong to the site's registrable domain or freemail allowlist
+func filterEmailsBySite(siteURL string, emails []string) []string {
+	if len(emails) == 0 {
+		return emails
+	}
+	regDomain := getRegistrableDomain(siteURL)
+	allowFreemail := map[string]bool{
+		"googlemail.com":  true,
+		"gmail.com":  true,
+		"yahoo.com":  true,
+		"outlook.com": true,
+		"hotmail.com": true,
+		"live.com":    true,
+		"msn.com":     true,
+		"icloud.com":  true,
+		"proton.me":   true,
+		"pm.me":       true,
+		"t-online.de": true,
+		"t-online.at": true,
+		"freenet.de": true,
+		"gmx.de":      true,
+		"web.de":      true,
+		"gmx.net":     true,
+		"gmx.com":     true,
+		"gmx.ch":      true,
+		"gmx.at":      true,
+		"gmx.eu":      true,
+		"gmx.fr":      true,
+		"gmx.it":      true,
+		"gmx.es":      true,
+		"gmx.nl":      true,
+		"gmx.pt":      true,
+
+	}
+	var out []string
+	seen := map[string]bool{}
+	for _, e := range emails {
+		parts := strings.Split(strings.ToLower(strings.TrimSpace(e)), "@")
+		if len(parts) != 2 {
+			continue
+		}
+		domain := parts[1]
+		rd := getRegistrableDomain(domain)
+		if allowFreemail[rd] || (regDomain != "" && strings.HasSuffix(domain, regDomain)) {
+			if !seen[e] {
+				out = append(out, e)
+				seen[e] = true
+			}
+		}
+	}
 	return out
 }
