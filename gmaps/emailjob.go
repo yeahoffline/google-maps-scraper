@@ -92,6 +92,9 @@ func (j *EmailExtractJob) Process(ctx context.Context, resp *scrapemate.Response
 
 	j.Entry.Emails = emails
 
+	// Check for solar keywords in website content
+	j.Entry.HasSolarKeywords = checkSolarKeywords(doc, resp.Body)
+
 	return j.Entry, nil, nil
 }
 
@@ -442,4 +445,31 @@ func filterEmailsBySite(siteURL string, emails []string) []string {
 		}
 	}
 	return out
+}
+
+// checkSolarKeywords checks if the website content contains any solar-related keywords
+func checkSolarKeywords(doc *goquery.Document, body []byte) bool {
+	solarKeywords := []string{
+		"Solar",
+		"Investitionsbzugsbetrag",
+		"Photovoltaik",
+	}
+
+	// Check in document text
+	text := doc.Text()
+	for _, keyword := range solarKeywords {
+		if strings.Contains(text, keyword) {
+			return true
+		}
+	}
+
+	// Also check in raw body as fallback
+	bodyStr := strings.ToLower(string(body))
+	for _, keyword := range solarKeywords {
+		if strings.Contains(bodyStr, strings.ToLower(keyword)) {
+			return true
+		}
+	}
+
+	return false
 }

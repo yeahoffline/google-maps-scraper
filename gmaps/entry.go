@@ -94,6 +94,7 @@ type Entry struct {
 	UserReviews         []Review               `json:"user_reviews"`
 	UserReviewsExtended []Review               `json:"user_reviews_extended"`
 	Emails              []string               `json:"emails"`
+	HasSolarKeywords    bool                   `json:"has_solar_keywords"`
 }
 
 func (e *Entry) haversineDistance(lat, lon float64) float64 {
@@ -190,6 +191,7 @@ func (e *Entry) CsvHeaders() []string {
 		"user_reviews",
 		"user_reviews_extended",
 		"emails",
+		"has_solar_keywords",
 	}
 }
 
@@ -228,6 +230,7 @@ func (e *Entry) CsvRow() []string {
 		stringify(e.UserReviews),
 		stringify(e.UserReviewsExtended),
 		stringSliceToString(e.Emails),
+		stringify(e.HasSolarKeywords),
 	}
 }
 
