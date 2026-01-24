@@ -16,6 +16,8 @@
 
 ![Example GIF](img/example.gif)
 
+> 💡 **New:** Export leads directly to [LeadsDB](https://getleadsdb.com/) - manage via API, AI/MCP integration, or UI with custom filtering and exports.
+
 > **Love this project?** A star helps others discover it and motivates continued development. [Become a sponsor](https://github.com/sponsors/gosom) to directly support new features and maintenance.
 
 ---
@@ -48,11 +50,19 @@ Fast, reliable, and scalable. Used by Fortune 500 companies. [**View all APIs �
 
 ---
 
-### [Decodo](https://visit.decodo.com/APVbbx) - Premium residential proxies with #1 response time
+### [HasData](https://hasdata.com/scrapers/google-maps?utm_source=github&utm_medium=sponsorship&utm_campaign=gosom) - No-code Google Maps Scraper & Email Extraction
 
-[![Decodo Proxies](./img/decodo.png)](https://visit.decodo.com/APVbbx)
+[![HasData Google Maps Scraper](./img/hd-gm-banner.png)](https://hasdata.com/scrapers/google-maps?utm_source=github&utm_medium=sponsorship&utm_campaign=gosom)
 
-125M+ IPs · 195+ locations · No CAPTCHAs · No IP bans. [**Start 3-day free trial →**](https://visit.decodo.com/APVbbx) | [Integration guide](decodo.md)
+Extract business leads, emails, addresses, phones, reviews and more. [**Get 1,000 free credits →**](https://hasdata.com/scrapers/google-maps?utm_source=github&utm_medium=sponsorship&utm_campaign=gosom)
+
+---
+
+### [LeadsDB](https://getleadsdb.com/) - Your Central Database for Business Leads
+
+[![LeadsDB](./img/leadsdb-banner.png)](https://getleadsdb.com/)
+
+Push leads via API or AI agent, remove duplicates automatically, and export when ready. [**Start free →**](https://getleadsdb.com/)
 
 ---
 
@@ -105,11 +115,11 @@ The scraper has [built-in LeadsDB integration](#export-to-leadsdb) - just add yo
   - [Using Proxies](#using-proxies)
   - [Email Extraction](#email-extraction)
   - [Fast Mode](#fast-mode)
+- [Export to LeadsDB](#export-to-leadsdb)
 - [Advanced Usage](#advanced-usage)
   - [PostgreSQL Database Provider](#postgresql-database-provider)
   - [Kubernetes Deployment](#kubernetes-deployment)
   - [Custom Writer Plugins](#custom-writer-plugins)
-  - [Export to LeadsDB](#export-to-leadsdb)
 - [Performance](#performance)
 - [Support the Project](#support-the-project)
 - [Sponsors](#sponsors)
@@ -150,9 +160,23 @@ touch results.csv && docker run \
   -exit-on-inactivity 3m
 ```
 
+> **Tip:** Use `gosom/google-maps-scraper:latest-rod` for the Rod version with faster container startup.
+
 **Want emails?** Add the `-email` flag.
 
 **Want all reviews (up to ~300)?** Add `--extra-reviews` and use `-json` output.
+
+**Want to skip CSV files?** Send leads directly to [LeadsDB](https://getleadsdb.com/):
+
+```bash
+docker run \
+  -v $PWD/example-queries.txt:/example-queries \
+  gosom/google-maps-scraper \
+  -depth 1 \
+  -input /example-queries \
+  -leadsdb-api-key "your-api-key" \
+  -exit-on-inactivity 3m
+```
 
 ### REST API
 
@@ -174,23 +198,40 @@ Full OpenAPI 3.0.3 documentation available at http://localhost:8080/api/docs
 
 ### Using Docker (Recommended)
 
+Two Docker image variants are available:
+
+| Image | Tag | Browser Engine | Best For |
+|-------|-----|----------------|----------|
+| Playwright (default) | `latest`, `vX.X.X` | Playwright | Most users, better stability |
+| Rod | `latest-rod`, `vX.X.X-rod` | Rod/Chromium | Lightweight, faster startup |
+
 ```bash
+# Playwright version (default)
 docker pull gosom/google-maps-scraper
+
+# Rod version (alternative)
+docker pull gosom/google-maps-scraper:latest-rod
 ```
 
 ### Build from Source
 
-Requirements: Go 1.25.5+
+Requirements: Go 1.25.6+
 
 ```bash
 git clone https://github.com/gosom/google-maps-scraper.git
 cd google-maps-scraper
 go mod download
+
+# Playwright version (default)
 go build
+./google-maps-scraper -input example-queries.txt -results results.csv -exit-on-inactivity 3m
+
+# Rod version (alternative)
+go build -tags rod
 ./google-maps-scraper -input example-queries.txt -results results.csv -exit-on-inactivity 3m
 ```
 
-> First run downloads required Playwright browser libraries.
+> First run downloads required browser libraries (Playwright or Chromium depending on version).
 
 ---
 
@@ -250,6 +291,7 @@ go build
 | 31 | `user_reviews` | Customer reviews (text, rating, timestamp) |
 | 32 | `emails` | Extracted email addresses (requires `-email` flag) |
 | 33 | `user_reviews_extended` | Extended reviews up to ~300 (requires `-extra-reviews`) |
+| 34 | `place_id` | Google's unique place id |
 
 </details>
 
@@ -332,7 +374,7 @@ If you need reliable proxies, these providers support this project as sponsors:
 | [Decodo](https://visit.decodo.com/APVbbx) | #1 response time, 125M+ IPs | [3-day free trial](https://visit.decodo.com/APVbbx) |
 | [Evomi](https://evomi.com?utm_source=github&utm_medium=banner&utm_campaign=gosom-maps) | Swiss quality, 150+ countries | From $0.49/GB |
 
-Using their services helps fund continued development of this scraper. See the [Decodo integration guide](decodo.md) for setup instructions.
+Using their services helps fund continued development of this scraper.
 
 ### Email Extraction
 
@@ -359,6 +401,61 @@ Fast mode returns up to 21 results per query, ordered by distance. Useful for qu
 ```
 
 > **Warning:** Fast mode is in Beta. You may experience blocking.
+
+---
+
+## Export to LeadsDB
+
+Skip the CSV files and send leads directly to a managed database. [LeadsDB](https://getleadsdb.com/) handles deduplication, filtering, and provides an API for your applications.
+
+**Using Docker:**
+```bash
+docker run \
+  -v $PWD/example-queries.txt:/example-queries \
+  gosom/google-maps-scraper \
+  -depth 1 \
+  -input /example-queries \
+  -leadsdb-api-key "your-api-key" \
+  -exit-on-inactivity 3m
+```
+
+**Using binary:**
+```bash
+./google-maps-scraper \
+  -input queries.txt \
+  -leadsdb-api-key "your-api-key" \
+  -exit-on-inactivity 3m
+```
+
+Or via environment variable:
+```bash
+export LEADSDB_API_KEY="your-api-key"
+./google-maps-scraper -input queries.txt -exit-on-inactivity 3m
+```
+
+<details>
+<summary><strong>Field Mapping</strong></summary>
+
+| Google Maps | LeadsDB |
+|-------------|---------|
+| Title | Name |
+| Category | Category |
+| Categories | Tags |
+| Phone | Phone |
+| Website | Website |
+| Address | Address, City, State, Country, PostalCode |
+| Latitude/Longitude | Coordinates |
+| Review Rating | Rating |
+| Review Count | ReviewCount |
+| Emails | Email |
+| Thumbnail | LogoURL |
+| CID | SourceID |
+
+Additional fields (Google Maps link, plus code, price range, etc.) are stored as custom attributes.
+
+</details>
+
+Get your API key at [getleadsdb.com/settings](https://getleadsdb.com/settings) after signing up.
 
 ---
 
@@ -435,47 +532,6 @@ go build -buildmode=plugin -tags=plugin -o myplugin.so myplugin.go
 ./google-maps-scraper -writer ~/plugins:MyWriter -input queries.txt
 ```
 
-### Export to LeadsDB
-
-Skip the CSV files and send leads directly to a managed database. [LeadsDB](https://getleadsdb.com/) handles deduplication, filtering, and provides an API for your applications.
-
-```bash
-./google-maps-scraper \
-  -input queries.txt \
-  -leadsdb-api-key "your-api-key" \
-  -exit-on-inactivity 3m
-```
-
-Or via environment variable:
-```bash
-export LEADSDB_API_KEY="your-api-key"
-./google-maps-scraper -input queries.txt -exit-on-inactivity 3m
-```
-
-<details>
-<summary><strong>Field Mapping</strong></summary>
-
-| Google Maps | LeadsDB |
-|-------------|---------|
-| Title | Name |
-| Category | Category |
-| Categories | Tags |
-| Phone | Phone |
-| Website | Website |
-| Address | Address, City, State, Country, PostalCode |
-| Latitude/Longitude | Coordinates |
-| Review Rating | Rating |
-| Review Count | ReviewCount |
-| Emails | Email |
-| Thumbnail | LogoURL |
-| CID | SourceID |
-
-Additional fields (Google Maps link, plus code, price range, etc.) are stored as custom attributes.
-
-</details>
-
-Get your API key at [getleadsdb.com/settings](https://getleadsdb.com/settings) after signing up.
-
 ---
 
 ## Performance
@@ -519,6 +575,7 @@ When you need proxies, APIs, or cloud services, consider using our sponsors. You
 - **Need proxies?** [Decodo](https://visit.decodo.com/APVbbx) or [Evomi](https://evomi.com?utm_source=github&utm_medium=banner&utm_campaign=gosom-maps)
 - **Prefer an API?** [SerpApi](https://serpapi.com/?utm_source=google-maps-scraper) or [SearchAPI](https://www.searchapi.io/google-maps?via=gosom)
 - **No-code solution?** [Scrap.io](https://scrap.io?utm_medium=ads&utm_source=github_gosom_gmap_scraper) or [G Maps Extractor](https://gmapsextractor.com?utm_source=github&utm_medium=banner&utm_campaign=gosom)
+- **Manage your leads?** [LeadsDB](https://getleadsdb.com/) - deduplicate, filter, and export with AI
 - **Cloud hosting?** [DigitalOcean](https://www.digitalocean.com/?refcode=c11136c4693c&utm_campaign=Referral_Invite&utm_medium=Referral_Program&utm_source=badge) ($200 credit) or [Hetzner](https://hetzner.cloud/?ref=ihtQPa0cT18n) (EUR 20 credit)
 
 ---
@@ -563,13 +620,13 @@ A huge thank you to the sponsors who make this project possible!
 
 ---
 
-#### [Decodo](https://visit.decodo.com/APVbbx)
+#### [HasData](https://hasdata.com/scrapers/google-maps?utm_source=github&utm_medium=sponsorship&utm_campaign=gosom)
 
-[![Decodo Proxies](./img/decodo.png)](https://visit.decodo.com/APVbbx)
+[![HasData Google Maps Scraper](./img/hd-gm-banner.png)](https://hasdata.com/scrapers/google-maps?utm_source=github&utm_medium=sponsorship&utm_campaign=gosom)
 
-**Premium residential proxies with #1 response time.** 125M+ IPs · 195+ locations · No CAPTCHAs · No IP bans
+**No-code Google Maps Scraper & Email Extraction.** Extract business leads, emails, addresses, phones, reviews and more.
 
-[**Start 3-day free trial →**](https://visit.decodo.com/APVbbx) · [Integration guide](decodo.md)
+[**Get 1,000 free credits →**](https://hasdata.com/scrapers/google-maps?utm_source=github&utm_medium=sponsorship&utm_campaign=gosom) · [Learn more](sponsors/hasdata.md)
 
 ---
 
@@ -594,6 +651,19 @@ Swiss quality proxies from $0.49/GB<br>150+ countries · 24/7 support · 99.9% u
 
 Google Maps API for easy SERP scraping<br>Real-time data · Simple integration
 
+</td>
+</tr>
+<tr>
+<td align="center" width="50%">
+
+[![LeadsDB](https://getleadsdb.com/static/logo/logo-dark.svg)](https://getleadsdb.com/)
+
+**[LeadsDB](https://getleadsdb.com/)**
+
+Manage leads after scraping<br>Deduplication · AI-ready · Advanced filtering
+
+</td>
+<td align="center" width="50%">
 </td>
 </tr>
 </table>
