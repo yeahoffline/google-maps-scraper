@@ -1,11 +1,16 @@
 package gmaps
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"html"
+	"io"
+	"net/http"
 	"net/url"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/PuerkitoBio/goquery"
 	"github.com/google/uuid"
@@ -87,13 +92,20 @@ func (j *EmailExtractJob) Process(ctx context.Context, resp *scrapemate.Response
 		emails = regexEmailExtractor(resp.Body)
 	}
 
+	// Crawl contact/impressum/about pages for additional emails
+	contactURLs := findContactPageURLs(doc, j.URL)
+	for _, cu := range contactURLs {
+		log.Info("Crawling contact page for emails", "url", cu)
+		contactEmails := fetchAndExtractEmails(ctx, cu)
+		emails = append(emails, contactEmails...)
+	}
+
+	emails = deduplicateEmails(emails)
+
 	// Filter emails to those relevant to the site's domain or freemail allowlist
 	emails = filterEmailsBySite(j.URL, emails)
 
 	j.Entry.Emails = emails
-
-	// Check for solar keywords in website content
-	//j.Entry.HasSolarKeywords = checkSolarKeywords(doc, resp.Body)
 
 	return j.Entry, nil, nil
 }
@@ -126,7 +138,7 @@ func docEmailExtractor(doc *goquery.Document) []string {
 	})
 
 	// Check text content of elements that commonly contain emails
-	doc.Find("p, div, span, address").Each(func(_ int, s *goquery.Selection) {
+	doc.Find("p, div, span, address, li, td, th, footer, section, header, dd, label, blockquote").Each(func(_ int, s *goquery.Selection) {
 		text := s.Text()
 		// Light deobfuscation pass before extraction
 		deob := deobfuscateEmailsText(text)
@@ -381,9 +393,11 @@ func isBlockedLocalPart(email string) bool {
 	return false
 }
 
-// deobfuscateEmailsText replaces common obfuscations like "[at]" and "[dot]"
+// deobfuscateEmailsText replaces common obfuscations like "[at]", "[dot]", and HTML entities
 func deobfuscateEmailsText(s string) string {
-	r := strings.ToLower(s)
+	// Decode HTML entities first (&#64; → @, &#46; → ., &#x40; → @, etc.)
+	r := html.UnescapeString(s)
+	r = strings.ToLower(r)
 	// Replace bracketed and spaced variants
 	replacements := []struct{ re, sub string }{
 		{re: `\s*\[\s*at\s*\]\s*|\s*\(\s*at\s*\)\s*|\s*\{\s*at\s*\}\s*`, sub: "@"},
@@ -394,9 +408,8 @@ func deobfuscateEmailsText(s string) string {
 	for _, rp := range replacements {
 		out = regexp.MustCompile(rp.re).ReplaceAllString(out, rp.sub)
 	}
-	// remove spaces around @ and .
+	// Remove spaces around @ only (not dots -- global dot-space removal creates false positives)
 	out = regexp.MustCompile(`\s*@\s*`).ReplaceAllString(out, "@")
-	out = regexp.MustCompile(`\s*\.\s*`).ReplaceAllString(out, ".")
 	return out
 }
 
@@ -425,32 +438,48 @@ func filterEmailsBySite(siteURL string, emails []string) []string {
 	}
 	regDomain := getRegistrableDomain(siteURL)
 	allowFreemail := map[string]bool{
-		"googlemail.com":  true,
-		"gmail.com":  true,
-		"yahoo.com":  true,
-		"outlook.com": true,
-		"hotmail.com": true,
-		"live.com":    true,
-		"msn.com":     true,
-		"icloud.com":  true,
-		"proton.me":   true,
-		"pm.me":       true,
-		"t-online.de": true,
-		"t-online.at": true,
-		"freenet.de": true,
-		"gmx.de":      true,
-		"web.de":      true,
-		"gmx.net":     true,
-		"gmx.com":     true,
-		"gmx.ch":      true,
-		"gmx.at":      true,
-		"gmx.eu":      true,
-		"gmx.fr":      true,
-		"gmx.it":      true,
-		"gmx.es":      true,
-		"gmx.nl":      true,
-		"gmx.pt":      true,
-
+		"googlemail.com": true,
+		"gmail.com":      true,
+		"yahoo.com":      true,
+		"yahoo.nl":       true,
+		"outlook.com":    true,
+		"outlook.nl":     true,
+		"hotmail.com":    true,
+		"hotmail.nl":     true,
+		"live.com":       true,
+		"live.nl":        true,
+		"msn.com":        true,
+		"icloud.com":     true,
+		"proton.me":      true,
+		"pm.me":          true,
+		"t-online.de":    true,
+		"t-online.at":    true,
+		"freenet.de":     true,
+		"gmx.de":         true,
+		"gmx.net":        true,
+		"gmx.com":        true,
+		"gmx.ch":         true,
+		"gmx.at":         true,
+		"gmx.eu":         true,
+		"gmx.fr":         true,
+		"gmx.it":         true,
+		"gmx.es":         true,
+		"gmx.nl":         true,
+		"gmx.pt":         true,
+		"web.de":         true,
+		"ziggo.nl":       true,
+		"kpnmail.nl":     true,
+		"kpnplanet.nl":   true,
+		"hetnet.nl":      true,
+		"home.nl":        true,
+		"planet.nl":      true,
+		"xs4all.nl":      true,
+		"upcmail.nl":     true,
+		"casema.nl":      true,
+		"chello.nl":      true,
+		"quicknet.nl":    true,
+		"solcon.nl":      true,
+		"tele2.nl":       true,
 	}
 	var out []string
 	seen := map[string]bool{}
@@ -461,11 +490,138 @@ func filterEmailsBySite(siteURL string, emails []string) []string {
 		}
 		domain := parts[1]
 		rd := getRegistrableDomain(domain)
-		if allowFreemail[rd] || (regDomain != "" && strings.HasSuffix(domain, regDomain)) {
+		if allowFreemail[rd] || (regDomain != "" && rd == regDomain) {
 			if !seen[e] {
 				out = append(out, e)
 				seen[e] = true
 			}
+		}
+	}
+	return out
+}
+
+var contactPagePatterns = []string{
+	"contact", "kontakt", "impressum", "imprint", "about",
+	"over-ons", "about-us", "contact-us", "ueber-uns",
+	"over ons", "neem contact", "kontaktieren",
+}
+
+const maxContactPages = 5
+
+// findContactPageURLs finds links to contact/impressum/about pages in the document
+func findContactPageURLs(doc *goquery.Document, baseURL string) []string {
+	base, err := url.Parse(baseURL)
+	if err != nil {
+		return nil
+	}
+
+	seen := map[string]bool{base.String(): true}
+	var urls []string
+
+	doc.Find("a[href]").Each(func(_ int, s *goquery.Selection) {
+		if len(urls) >= maxContactPages {
+			return
+		}
+
+		href, exists := s.Attr("href")
+		if !exists || href == "" || strings.HasPrefix(href, "#") || strings.HasPrefix(href, "javascript:") {
+			return
+		}
+
+		text := strings.ToLower(strings.TrimSpace(s.Text()))
+		hrefLower := strings.ToLower(href)
+
+		isContact := false
+		for _, p := range contactPagePatterns {
+			if strings.Contains(hrefLower, p) || strings.Contains(text, p) {
+				isContact = true
+				break
+			}
+		}
+
+		if !isContact {
+			return
+		}
+
+		resolved, err := base.Parse(href)
+		if err != nil {
+			return
+		}
+
+		// Only follow same-host links
+		if resolved.Host != "" && resolved.Host != base.Host {
+			return
+		}
+
+		fullURL := resolved.String()
+		if !seen[fullURL] {
+			urls = append(urls, fullURL)
+			seen[fullURL] = true
+		}
+	})
+
+	return urls
+}
+
+// fetchAndExtractEmails fetches a page and extracts emails from it
+func fetchAndExtractEmails(ctx context.Context, pageURL string) []string {
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "GET", pageURL, nil)
+	if err != nil {
+		return nil
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+	req.Header.Set("Accept", "text/html,application/xhtml+xml")
+
+	client := &http.Client{
+		Timeout: 15 * time.Second,
+		CheckRedirect: func(_ *http.Request, via []*http.Request) error {
+			if len(via) >= 3 {
+				return http.ErrUseLastResponse
+			}
+			return nil
+		},
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil
+	}
+
+	const maxBodySize = 5 << 20 // 5 MB
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBodySize))
+	if err != nil {
+		return nil
+	}
+
+	doc, err := goquery.NewDocumentFromReader(bytes.NewReader(body))
+	if err != nil {
+		return nil
+	}
+
+	emails := docEmailExtractor(doc)
+	if len(emails) == 0 {
+		emails = regexEmailExtractor(body)
+	}
+
+	return emails
+}
+
+func deduplicateEmails(emails []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, e := range emails {
+		e = strings.ToLower(strings.TrimSpace(e))
+		if e != "" && !seen[e] {
+			out = append(out, e)
+			seen[e] = true
 		}
 	}
 	return out
