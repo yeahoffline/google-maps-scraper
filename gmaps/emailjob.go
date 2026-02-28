@@ -93,7 +93,7 @@ func (j *EmailExtractJob) Process(ctx context.Context, resp *scrapemate.Response
 	j.Entry.Emails = emails
 
 	// Check for solar keywords in website content
-	j.Entry.HasSolarKeywords = checkSolarKeywords(doc, resp.Body)
+	//j.Entry.HasSolarKeywords = checkSolarKeywords(doc, resp.Body)
 
 	return j.Entry, nil, nil
 }
@@ -256,6 +256,7 @@ func getValidEmail(s string) (string, error) {
 
 	// Remove common noise from emails
 	s = strings.TrimPrefix(s, "mailto:")
+	s = sanitizeEmailInput(s)
 	// Remove any query parameters
 	if idx := strings.IndexByte(s, '?'); idx >= 0 {
 		s = s[:idx]
@@ -280,12 +281,35 @@ func getValidEmail(s string) (string, error) {
 	return email.String(), nil
 }
 
-// normalizeEmail lowercases and trims an email string
+// normalizeEmail lowercases, trims, and sanitizes an email string
 func normalizeEmail(s string) string {
 	s = strings.TrimSpace(strings.ToLower(s))
 	if s == "" {
 		return ""
 	}
+	return sanitizeEmailInput(s)
+}
+
+// sanitizeEmailInput removes common junk (trailing punctuation, numbers, parentheticals) from email candidates
+func sanitizeEmailInput(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	// Strip leading/trailing punctuation and whitespace
+	trimChars := ".,;:!?()[]{}\"' \t\n\r"
+	s = strings.Trim(s, trimChars)
+	// Remove parenthetical suffix: "email@domain.com (contact)" -> "email@domain.com"
+	if idx := strings.Index(s, " ("); idx > 0 {
+		s = strings.TrimSpace(s[:idx])
+		s = strings.Trim(s, trimChars)
+	}
+	// Remove trailing numbers after what looks like a valid email (e.g. "info@domain.com123" -> "info@domain.com")
+	if trailingNums := regexp.MustCompile(`^([a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,})[0-9]+$`); trailingNums.MatchString(s) {
+		s = trailingNums.ReplaceAllString(s, "$1")
+	}
+	// Remove trailing hyphen or underscore that sometimes gets captured
+	s = strings.TrimRight(s, "-_")
 	return s
 }
 
