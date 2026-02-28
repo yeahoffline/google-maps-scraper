@@ -44,22 +44,22 @@ func Test_parseMailtoEmails(t *testing.T) {
 	}{
 		{
 			name:     "simple mailto",
-			input:    "mailto:info@example.com",
-			expected: []string{"info@example.com"},
+			input:    "mailto:info@example.org",
+			expected: []string{"info@example.org"},
 		},
 		{
 			name:     "mailto with trailing junk",
-			input:    "mailto:info@example.com.",
-			expected: []string{"info@example.com"},
+			input:    "mailto:info@example.org.",
+			expected: []string{"info@example.org"},
 		},
 		{
 			name:     "multiple recipients",
-			input:    "mailto:foo@example.com,bar@example.com",
-			expected: []string{"foo@example.com", "bar@example.com"},
+			input:    "mailto:foo@example.org,bar@example.org",
+			expected: []string{"foo@example.org", "bar@example.org"},
 		},
 		{
 			name:     "blocked no-reply",
-			input:    "mailto:noreply@example.com",
+			input:    "mailto:noreply@example.org",
 			expected: nil,
 		},
 		{
@@ -118,17 +118,17 @@ func Test_regexEmailExtractor(t *testing.T) {
 	}{
 		{
 			name:     "extracts clean email",
-			body:     "Contact us at info@example.com for more",
+			body:     "Contact us at info@example.org for more",
 			minCount: 1,
 		},
 		{
 			name:     "extracts obfuscated [at] [dot]",
-			body:     "Email: contact [at] example [dot] com",
+			body:     "Email: contact [at] example [dot] org",
 			minCount: 1,
 		},
 		{
 			name:     "sanitizes trailing numbers",
-			body:     "info@example.com123 or call us",
+			body:     "info@example.org123 or call us",
 			minCount: 0, // go-emailaddress may or may not parse this; we rely on sanitize in normalizeEmail
 		},
 	}
