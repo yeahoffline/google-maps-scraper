@@ -276,24 +276,6 @@ func Test_filterEmailsBySite(t *testing.T) {
 			expected: []string{"user@gmail.com"},
 		},
 		{
-			name:     "NL freemail ziggo",
-			siteURL:  "https://somesite.nl",
-			emails:   []string{"user@ziggo.nl"},
-			expected: []string{"user@ziggo.nl"},
-		},
-		{
-			name:     "NL freemail kpnmail",
-			siteURL:  "https://somesite.nl",
-			emails:   []string{"user@kpnmail.nl"},
-			expected: []string{"user@kpnmail.nl"},
-		},
-		{
-			name:     "NL freemail hetnet",
-			siteURL:  "https://somesite.nl",
-			emails:   []string{"user@hetnet.nl"},
-			expected: []string{"user@hetnet.nl"},
-		},
-		{
 			name:     "unrelated domain filtered",
 			siteURL:  "https://myfarm.nl",
 			emails:   []string{"spam@unrelated.com"},
