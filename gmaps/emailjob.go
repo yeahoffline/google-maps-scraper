@@ -439,7 +439,6 @@ var allowFreemail = map[string]bool{
 	"icloud.com":     true,
 	"me.com":         true,
 	"mac.com":        true,
-	"pm.me":      true,
 	"proton.me":      true,
 	"protonmail.com": true,
 	"pm.me":          true,
