@@ -1,6 +1,5 @@
 # Build stage for Playwright dependencies
-# scrapemate imports playwright-community, but we replace it with mxschmitt
-# (driver 1.61.1). The old community 1.60.0 zip was removed from Azure CDN (404).
+# Driver 1.61.1 via mxschmitt (community 1.60.0 Azure CDN zips return 404).
 FROM ubuntu:22.04 AS playwright-deps
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=UTC
@@ -32,6 +31,14 @@ WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
+# scrapemate still imports playwright-community (driver 1.60.0, CDN 404).
+# Rewrite its module cache sources to mxschmitt so the binary expects 1.61.1.
+RUN set -eux; \
+    scrapemate_dir="$(go list -m -f '{{.Dir}}' github.com/gosom/scrapemate)"; \
+    chmod -R u+w "$scrapemate_dir"; \
+    find "$scrapemate_dir" \( -name '*.go' -o -name 'go.mod' \) -print0 \
+      | xargs -0 sed -i \
+        's|github.com/playwright-community/playwright-go|github.com/mxschmitt/playwright-go|g'
 RUN CGO_ENABLED=0 go build -ldflags="-w -s" -o /usr/bin/google-maps-scraper
 
 # Final stage
