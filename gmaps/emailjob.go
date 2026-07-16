@@ -14,11 +14,10 @@ import (
 
 	"github.com/PuerkitoBio/goquery"
 	"github.com/google/uuid"
+	"github.com/gosom/google-maps-scraper/exiter"
 	"github.com/gosom/scrapemate"
 	"github.com/mcnijman/go-emailaddress"
 	"golang.org/x/net/publicsuffix"
-
-	"github.com/gosom/google-maps-scraper/exiter"
 )
 
 type EmailExtractJobOptions func(*EmailExtractJob)
@@ -26,9 +25,8 @@ type EmailExtractJobOptions func(*EmailExtractJob)
 type EmailExtractJob struct {
 	scrapemate.Job
 
-	Entry                   *Entry
-	ExitMonitor             exiter.Exiter
-	WriterManagedCompletion bool
+	Entry       *Entry
+	ExitMonitor exiter.Exiter
 }
 
 func NewEmailJob(parentID string, entry *Entry, opts ...EmailExtractJobOptions) *EmailExtractJob {
@@ -42,7 +40,7 @@ func NewEmailJob(parentID string, entry *Entry, opts ...EmailExtractJobOptions) 
 			ID:         uuid.New().String(),
 			ParentID:   parentID,
 			Method:     "GET",
-			URL:        normalizeGoogleURL(entry.WebSite),
+			URL:        entry.WebSite,
 			MaxRetries: defaultMaxRetries,
 			Priority:   defaultPrio,
 		},
@@ -63,12 +61,6 @@ func WithEmailJobExitMonitor(exitMonitor exiter.Exiter) EmailExtractJobOptions {
 	}
 }
 
-func WithEmailJobWriterManagedCompletion() EmailExtractJobOptions {
-	return func(j *EmailExtractJob) {
-		j.WriterManagedCompletion = true
-	}
-}
-
 func (j *EmailExtractJob) Process(ctx context.Context, resp *scrapemate.Response) (any, []scrapemate.IJob, error) {
 	defer func() {
 		resp.Document = nil
@@ -76,7 +68,7 @@ func (j *EmailExtractJob) Process(ctx context.Context, resp *scrapemate.Response
 	}()
 
 	defer func() {
-		if j.ExitMonitor != nil && !j.WriterManagedCompletion {
+		if j.ExitMonitor != nil {
 			j.ExitMonitor.IncrPlacesCompleted(1)
 		}
 	}()
@@ -192,6 +184,7 @@ func regexEmailExtractor(body []byte) []string {
 	return emails
 }
 
+// New helper function to validate email domains
 func isValidEmailDomain(email string) bool {
 	parts := strings.Split(email, "@")
 	if len(parts) != 2 {
@@ -203,10 +196,10 @@ func isValidEmailDomain(email string) bool {
 	// Skip common disposable email domains
 	disposableDomains := map[string]bool{
 		// Testing/Example domains
-		"example.com": true,
-		"test.com":    true,
-		"sample.com":  true,
-
+		"example.com":     true,
+		"test.com":        true,
+		"sample.com":      true,
+		
 		// Hosting/Website Providers
 		"hostgator.com":    true,
 		"bluehost.com":     true,
@@ -224,31 +217,31 @@ func isValidEmailDomain(email string) bool {
 		"wix.com":          true,
 		"wordpress.com":    true,
 		"shopify.com":      true,
-
+		
 		// Website Builders/CMS
 		"weebly.com":    true,
 		"webflow.com":   true,
 		"myshopify.com": true,
 		"webnode.com":   true,
 		"jimdo.com":     true,
-
-		// Temporary/Disposable
-		"tempmail.com":      true,
-		"temp-mail.org":     true,
-		"guerrillamail.com": true,
-		"guerrillamail.net": true,
-		"guerrillamail.org": true,
-		"sharklasers.com":   true,
-		"10minutemail.com":  true,
-		"mailinator.com":    true,
-		"maildrop.cc":       true,
-		"yopmail.com":       true,
-
+		
+		// Temporary/Disposable (previous list)
+		"tempmail.com":       true,
+		"temp-mail.org":      true,
+		"guerrillamail.com":  true,
+		"guerrillamail.net":  true,
+		"guerrillamail.org":  true,
+		"sharklasers.com":    true,
+		"10minutemail.com":   true,
+		"mailinator.com":     true,
+		"maildrop.cc":        true,
+		"yopmail.com":        true,
+		
 		// Common Support/No-Reply Patterns
 		"no-reply.com":   true,
 		"noreply.com":    true,
 		"donotreply.com": true,
-
+		
 		// Common fake/testing
 		"localhost":     true,
 		"localhost.com": true,
@@ -448,9 +441,13 @@ func filterEmailsBySite(siteURL string, emails []string) []string {
 		"googlemail.com": true,
 		"gmail.com":      true,
 		"yahoo.com":      true,
+		"yahoo.nl":       true,
 		"outlook.com":    true,
+		"outlook.nl":     true,
 		"hotmail.com":    true,
+		"hotmail.nl":     true,
 		"live.com":       true,
+		"live.nl":        true,
 		"msn.com":        true,
 		"icloud.com":     true,
 		"proton.me":      true,
@@ -470,6 +467,19 @@ func filterEmailsBySite(siteURL string, emails []string) []string {
 		"gmx.nl":         true,
 		"gmx.pt":         true,
 		"web.de":         true,
+		"ziggo.nl":       true,
+		"kpnmail.nl":     true,
+		"kpnplanet.nl":   true,
+		"hetnet.nl":      true,
+		"home.nl":        true,
+		"planet.nl":      true,
+		"xs4all.nl":      true,
+		"upcmail.nl":     true,
+		"casema.nl":      true,
+		"chello.nl":      true,
+		"quicknet.nl":    true,
+		"solcon.nl":      true,
+		"tele2.nl":       true,
 	}
 	var out []string
 	seen := map[string]bool{}
@@ -617,30 +627,29 @@ func deduplicateEmails(emails []string) []string {
 	return out
 }
 
-// normalizeGoogleURL extracts the actual target URL from Google redirect URLs.
-// Google Maps sometimes returns URLs like "/url?q=http://example.com/&opi=..."
-// for external website links.
-func normalizeGoogleURL(rawURL string) string {
-	if rawURL == "" {
-		return rawURL
+// checkSolarKeywords checks if the website content contains any solar-related keywords
+func checkSolarKeywords(doc *goquery.Document, body []byte) bool {
+	solarKeywords := []string{
+		"Solar",
+		"Investitionsbzugsbetrag",
+		"Photovoltaik",
 	}
 
-	if strings.HasPrefix(rawURL, "/url?q=") {
-		fullURL := "https://www.google.com" + rawURL
-
-		parsed, err := url.Parse(fullURL)
-		if err != nil {
-			return rawURL
-		}
-
-		if target := parsed.Query().Get("q"); target != "" {
-			return target
+	// Check in document text
+	text := doc.Text()
+	for _, keyword := range solarKeywords {
+		if strings.Contains(text, keyword) {
+			return true
 		}
 	}
 
-	if strings.HasPrefix(rawURL, "/") {
-		return "https://www.google.com" + rawURL
+	// Also check in raw body as fallback
+	bodyStr := strings.ToLower(string(body))
+	for _, keyword := range solarKeywords {
+		if strings.Contains(bodyStr, strings.ToLower(keyword)) {
+			return true
+		}
 	}
 
-	return rawURL
+	return false
 }
