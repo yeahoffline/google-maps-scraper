@@ -4,7 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/mxschmitt/playwright-go"
+	// Resolved to mxschmitt via the go.mod replace (driver 1.61.1).
+	"github.com/playwright-community/playwright-go"
 
 	"github.com/gosom/google-maps-scraper/runner"
 )
