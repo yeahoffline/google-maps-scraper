@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/PuerkitoBio/goquery"
 	"github.com/google/uuid"
@@ -95,14 +96,16 @@ func (j *EmailExtractJob) Process(ctx context.Context, resp *scrapemate.Response
 		return j.Entry, nil, nil
 	}
 
+	// Merge DOM + regex extractors; regex catches emails outside the selected tags.
 	emails := docEmailExtractor(doc)
-	if len(emails) == 0 {
-		emails = regexEmailExtractor(resp.Body)
-	}
+	emails = append(emails, regexEmailExtractor(resp.Body)...)
 
 	// Crawl contact/impressum/about pages for additional emails
 	contactURLs := findContactPageURLs(doc, j.URL)
 	for _, cu := range contactURLs {
+		if err := ctx.Err(); err != nil {
+			break
+		}
 		log.Info("Crawling contact page for emails", "url", cu)
 		contactEmails := fetchAndExtractEmails(ctx, cu)
 		emails = append(emails, contactEmails...)
@@ -126,43 +129,33 @@ func docEmailExtractor(doc *goquery.Document) []string {
 	seen := map[string]bool{}
 	var emails []string
 
+	add := func(candidate string) {
+		candidate = normalizeEmail(candidate)
+		if candidate == "" || seen[candidate] {
+			return
+		}
+		if isValidEmailDomain(candidate) && !isBlockedLocalPart(candidate) {
+			emails = append(emails, candidate)
+			seen[candidate] = true
+		}
+	}
+
 	// Check mailto links
 	doc.Find("a[href^='mailto:']").Each(func(_ int, s *goquery.Selection) {
 		mailto, exists := s.Attr("href")
-		if exists {
-			for _, e := range parseMailtoEmails(mailto) {
-				candidate := normalizeEmail(e)
-				if candidate == "" {
-					continue
-				}
-				if !seen[candidate] {
-					if isValidEmailDomain(candidate) && !isBlockedLocalPart(candidate) {
-						emails = append(emails, candidate)
-						seen[candidate] = true
-					}
-				}
-			}
+		if !exists {
+			return
+		}
+		for _, e := range parseMailtoEmails(mailto) {
+			add(e)
 		}
 	})
 
 	// Check text content of elements that commonly contain emails
 	doc.Find("p, div, span, address, li, td, th, footer, section, header, dd, label, blockquote").Each(func(_ int, s *goquery.Selection) {
-		text := s.Text()
-		// Light deobfuscation pass before extraction
-		deob := deobfuscateEmailsText(text)
-		if addresses := emailaddress.Find([]byte(deob), false); len(addresses) > 0 {
-			for _, addr := range addresses {
-				candidate := normalizeEmail(addr.String())
-				if candidate == "" {
-					continue
-				}
-				if !seen[candidate] {
-					if isValidEmailDomain(candidate) && !isBlockedLocalPart(candidate) {
-						emails = append(emails, candidate)
-						seen[candidate] = true
-					}
-				}
-			}
+		deob := deobfuscateEmailsText(s.Text())
+		for _, addr := range emailaddress.Find([]byte(deob), false) {
+			add(addr.String())
 		}
 	})
 
@@ -173,19 +166,16 @@ func regexEmailExtractor(body []byte) []string {
 	seen := map[string]bool{}
 	var emails []string
 
-	// Apply same deobfuscation to body as a best-effort fallback
 	deob := deobfuscateEmailsText(string(body))
 	addresses := emailaddress.Find([]byte(deob), false)
 	for i := range addresses {
 		candidate := normalizeEmail(addresses[i].String())
-		if candidate == "" {
+		if candidate == "" || seen[candidate] {
 			continue
 		}
-		if !seen[candidate] {
-			if isValidEmailDomain(candidate) && !isBlockedLocalPart(candidate) {
-				emails = append(emails, candidate)
-				seen[candidate] = true
-			}
+		if isValidEmailDomain(candidate) && !isBlockedLocalPart(candidate) {
+			emails = append(emails, candidate)
+			seen[candidate] = true
 		}
 	}
 
@@ -309,6 +299,19 @@ func normalizeEmail(s string) string {
 	return sanitizeEmailInput(s)
 }
 
+var (
+	trailingEmailNumsRE = regexp.MustCompile(`(?i)^([a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,})[0-9]+$`)
+	recipientsSplitRE   = regexp.MustCompile(`[;,]`)
+	blockedLocalPartREs = []*regexp.Regexp{
+		regexp.MustCompile(`(?i)^no[\-._]?reply$`),
+		regexp.MustCompile(`(?i)^do[\-._]?not[\-._]?reply$`),
+		regexp.MustCompile(`(?i)^donotreply$`),
+	}
+	deobfuscateAtRE  = regexp.MustCompile(`(?i)\s*\[\s*at\s*\]\s*|\s*\(\s*at\s*\)\s*|\s*\{\s*at\s*\}\s*`)
+	deobfuscateDotRE = regexp.MustCompile(`(?i)\s*\[\s*dot\s*\]\s*|\s*\(\s*dot\s*\)\s*|\s*\{\s*dot\s*\}\s*|\s*\[\s*d0t\s*\]\s*|\s*\(\s*d0t\s*\)\s*|\s*\{\s*d0t\s*\}\s*`)
+	deobfuscateAtSp  = regexp.MustCompile(`\s*@\s*`)
+)
+
 // sanitizeEmailInput removes common junk (trailing punctuation, numbers, parentheticals) from email candidates
 func sanitizeEmailInput(s string) string {
 	s = strings.TrimSpace(s)
@@ -324,8 +327,8 @@ func sanitizeEmailInput(s string) string {
 		s = strings.Trim(s, trimChars)
 	}
 	// Remove trailing numbers after what looks like a valid email (e.g. "info@domain.com123" -> "info@domain.com")
-	if trailingNums := regexp.MustCompile(`^([a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,})[0-9]+$`); trailingNums.MatchString(s) {
-		s = trailingNums.ReplaceAllString(s, "$1")
+	if trailingEmailNumsRE.MatchString(s) {
+		s = trailingEmailNumsRE.ReplaceAllString(s, "$1")
 	}
 	// Remove trailing hyphen or underscore that sometimes gets captured
 	s = strings.TrimRight(s, "-_")
@@ -376,8 +379,7 @@ func parseMailtoEmails(mailto string) []string {
 }
 
 func splitRecipients(s string) []string {
-	// split on comma and semicolon
-	return regexp.MustCompile(`[;,]`).Split(s, -1)
+	return recipientsSplitRE.Split(s, -1)
 }
 
 // isBlockedLocalPart filters common no-reply style addresses
@@ -387,13 +389,8 @@ func isBlockedLocalPart(email string) bool {
 		return true
 	}
 	local := strings.ToLower(parts[0])
-	patterns := []string{
-		`^no[\-\._]?reply$`,
-		`^do[\-\._]?not[\-\._]?reply$`,
-		`^donotreply$`,
-	}
-	for _, p := range patterns {
-		if regexp.MustCompile(p).MatchString(local) {
+	for _, re := range blockedLocalPartREs {
+		if re.MatchString(local) {
 			return true
 		}
 	}
@@ -403,20 +400,12 @@ func isBlockedLocalPart(email string) bool {
 // deobfuscateEmailsText replaces common obfuscations like "[at]", "[dot]", and HTML entities
 func deobfuscateEmailsText(s string) string {
 	// Decode HTML entities first (&#64; → @, &#46; → ., &#x40; → @, etc.)
-	r := html.UnescapeString(s)
-	r = strings.ToLower(r)
-	// Replace bracketed and spaced variants
-	replacements := []struct{ re, sub string }{
-		{re: `\s*\[\s*at\s*\]\s*|\s*\(\s*at\s*\)\s*|\s*\{\s*at\s*\}\s*`, sub: "@"},
-		{re: `\s*\[\s*dot\s*\]\s*|\s*\(\s*dot\s*\)\s*|\s*\{\s*dot\s*\}\s*`, sub: "."},
-		{re: `\s*\[\s*d0t\s*\]\s*|\s*\(\s*d0t\s*\)\s*|\s*\{\s*d0t\s*\}\s*`, sub: "."},
-	}
-	out := r
-	for _, rp := range replacements {
-		out = regexp.MustCompile(rp.re).ReplaceAllString(out, rp.sub)
-	}
+	out := html.UnescapeString(s)
+	out = strings.ToLower(out)
+	out = deobfuscateAtRE.ReplaceAllString(out, "@")
+	out = deobfuscateDotRE.ReplaceAllString(out, ".")
 	// Remove spaces around @ only (not dots -- global dot-space removal creates false positives)
-	out = regexp.MustCompile(`\s*@\s*`).ReplaceAllString(out, "@")
+	out = deobfuscateAtSp.ReplaceAllString(out, "@")
 	return out
 }
 
@@ -431,11 +420,44 @@ func getRegistrableDomain(host string) string {
 			host = u.Hostname()
 		}
 	}
+	host = strings.TrimPrefix(host, "www.")
 	d, err := publicsuffix.EffectiveTLDPlusOne(host)
 	if err != nil {
 		return host
 	}
 	return d
+}
+
+var allowFreemail = map[string]bool{
+	"googlemail.com": true,
+	"gmail.com":      true,
+	"yahoo.com":      true,
+	"outlook.com":    true,
+	"hotmail.com":    true,
+	"live.com":       true,
+	"msn.com":        true,
+	"icloud.com":     true,
+	"me.com":         true,
+	"mac.com":        true,
+	"pm.me":      true,
+	"proton.me":      true,
+	"protonmail.com": true,
+	"pm.me":          true,
+	"t-online.de":    true,
+	"t-online.at":    true,
+	"freenet.de":     true,
+	"gmx.de":         true,
+	"gmx.net":        true,
+	"gmx.com":        true,
+	"gmx.ch":         true,
+	"gmx.at":         true,
+	"gmx.eu":         true,
+	"gmx.fr":         true,
+	"gmx.it":         true,
+	"gmx.es":         true,
+	"gmx.nl":         true,
+	"gmx.pt":         true,
+	"web.de":         true,
 }
 
 // filterEmailsBySite keeps emails that belong to the site's registrable domain or freemail allowlist
@@ -444,33 +466,6 @@ func filterEmailsBySite(siteURL string, emails []string) []string {
 		return emails
 	}
 	regDomain := getRegistrableDomain(siteURL)
-	allowFreemail := map[string]bool{
-		"googlemail.com": true,
-		"gmail.com":      true,
-		"yahoo.com":      true,
-		"outlook.com":    true,
-		"hotmail.com":    true,
-		"live.com":       true,
-		"msn.com":        true,
-		"icloud.com":     true,
-		"proton.me":      true,
-		"pm.me":          true,
-		"t-online.de":    true,
-		"t-online.at":    true,
-		"freenet.de":     true,
-		"gmx.de":         true,
-		"gmx.net":        true,
-		"gmx.com":        true,
-		"gmx.ch":         true,
-		"gmx.at":         true,
-		"gmx.eu":         true,
-		"gmx.fr":         true,
-		"gmx.it":         true,
-		"gmx.es":         true,
-		"gmx.nl":         true,
-		"gmx.pt":         true,
-		"web.de":         true,
-	}
 	var out []string
 	seen := map[string]bool{}
 	for _, e := range emails {
@@ -478,8 +473,7 @@ func filterEmailsBySite(siteURL string, emails []string) []string {
 		if len(parts) != 2 {
 			continue
 		}
-		domain := parts[1]
-		rd := getRegistrableDomain(domain)
+		rd := getRegistrableDomain(parts[1])
 		if allowFreemail[rd] || (regDomain != "" && rd == regDomain) {
 			if !seen[e] {
 				out = append(out, e)
@@ -498,6 +492,88 @@ var contactPagePatterns = []string{
 
 const maxContactPages = 5
 
+func isContactLink(href, text string) bool {
+	hrefLower := strings.ToLower(href)
+	textLower := strings.ToLower(strings.TrimSpace(text))
+
+	for _, p := range contactPagePatterns {
+		if strings.Contains(p, " ") {
+			if strings.Contains(textLower, p) {
+				return true
+			}
+			continue
+		}
+		if containsPathToken(hrefLower, p) || containsWord(textLower, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// containsPathToken reports whether token appears as a path/query segment in href.
+func containsPathToken(href, token string) bool {
+	if href == "" || token == "" {
+		return false
+	}
+	// Strip scheme/host if present so we only inspect the path-ish part.
+	if i := strings.Index(href, "://"); i >= 0 {
+		href = href[i+3:]
+		if j := strings.IndexByte(href, '/'); j >= 0 {
+			href = href[j:]
+		} else {
+			href = "/"
+		}
+	}
+	for _, part := range strings.FieldsFunc(href, func(r rune) bool {
+		return r == '/' || r == '?' || r == '#' || r == '&' || r == '=' || r == '.'
+	}) {
+		if part == token || strings.HasPrefix(part, token+"-") || strings.HasSuffix(part, "-"+token) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsWord(s, word string) bool {
+	if s == "" || word == "" {
+		return false
+	}
+	if strings.Contains(word, " ") {
+		return strings.Contains(s, word)
+	}
+	start := 0
+	for {
+		i := strings.Index(s[start:], word)
+		if i < 0 {
+			return false
+		}
+		i += start
+		beforeOK := i == 0 || !isWordChar(rune(s[i-1]))
+		after := i + len(word)
+		afterOK := after == len(s) || !isWordChar(rune(s[after]))
+		if beforeOK && afterOK {
+			return true
+		}
+		start = i + 1
+	}
+}
+
+func isWordChar(r rune) bool {
+	return unicode.IsLetter(r) || unicode.IsDigit(r)
+}
+
+func sameSiteHost(a, b string) bool {
+	a = strings.ToLower(strings.TrimSpace(a))
+	b = strings.ToLower(strings.TrimSpace(b))
+	if a == "" || b == "" {
+		return false
+	}
+	if a == b {
+		return true
+	}
+	return getRegistrableDomain(a) != "" && getRegistrableDomain(a) == getRegistrableDomain(b)
+}
+
 // findContactPageURLs finds links to contact/impressum/about pages in the document
 func findContactPageURLs(doc *goquery.Document, baseURL string) []string {
 	base, err := url.Parse(baseURL)
@@ -514,22 +590,11 @@ func findContactPageURLs(doc *goquery.Document, baseURL string) []string {
 		}
 
 		href, exists := s.Attr("href")
-		if !exists || href == "" || strings.HasPrefix(href, "#") || strings.HasPrefix(href, "javascript:") {
+		if !exists || href == "" || strings.HasPrefix(href, "#") || strings.HasPrefix(href, "javascript:") || strings.HasPrefix(href, "mailto:") {
 			return
 		}
 
-		text := strings.ToLower(strings.TrimSpace(s.Text()))
-		hrefLower := strings.ToLower(href)
-
-		isContact := false
-		for _, p := range contactPagePatterns {
-			if strings.Contains(hrefLower, p) || strings.Contains(text, p) {
-				isContact = true
-				break
-			}
-		}
-
-		if !isContact {
+		if !isContactLink(href, s.Text()) {
 			return
 		}
 
@@ -538,8 +603,8 @@ func findContactPageURLs(doc *goquery.Document, baseURL string) []string {
 			return
 		}
 
-		// Only follow same-host links
-		if resolved.Host != "" && resolved.Host != base.Host {
+		// Only follow same-site links (www vs apex / subdomains of same eTLD+1)
+		if resolved.Host != "" && !sameSiteHost(resolved.Host, base.Host) {
 			return
 		}
 
@@ -553,29 +618,29 @@ func findContactPageURLs(doc *goquery.Document, baseURL string) []string {
 	return urls
 }
 
+var contactHTTPClient = &http.Client{
+	Timeout: 15 * time.Second,
+	CheckRedirect: func(_ *http.Request, via []*http.Request) error {
+		if len(via) >= 3 {
+			return http.ErrUseLastResponse
+		}
+		return nil
+	},
+}
+
 // fetchAndExtractEmails fetches a page and extracts emails from it
 func fetchAndExtractEmails(ctx context.Context, pageURL string) []string {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, "GET", pageURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, pageURL, nil)
 	if err != nil {
 		return nil
 	}
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 	req.Header.Set("Accept", "text/html,application/xhtml+xml")
 
-	client := &http.Client{
-		Timeout: 15 * time.Second,
-		CheckRedirect: func(_ *http.Request, via []*http.Request) error {
-			if len(via) >= 3 {
-				return http.ErrUseLastResponse
-			}
-			return nil
-		},
-	}
-
-	resp, err := client.Do(req)
+	resp, err := contactHTTPClient.Do(req)
 	if err != nil {
 		return nil
 	}
@@ -597,11 +662,8 @@ func fetchAndExtractEmails(ctx context.Context, pageURL string) []string {
 	}
 
 	emails := docEmailExtractor(doc)
-	if len(emails) == 0 {
-		emails = regexEmailExtractor(body)
-	}
-
-	return emails
+	emails = append(emails, regexEmailExtractor(body)...)
+	return deduplicateEmails(emails)
 }
 
 func deduplicateEmails(emails []string) []string {

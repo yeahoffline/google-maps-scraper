@@ -28,6 +28,7 @@ func Test_sanitizeEmailInput(t *testing.T) {
 		{"wrapped in brackets", "[info@domain.com]", "info@domain.com"},
 		{"parenthetical suffix", "info@domain.com (main contact)", "info@domain.com"},
 		{"trailing numbers after TLD", "info@domain.com123", "info@domain.com"},
+		{"trailing numbers after uppercase TLD", "info@domain.COM123", "info@domain.COM"},
 		{"trailing numbers after subdomain TLD", "user@mail.domain.com456", "user@mail.domain.com"},
 		{"trailing hyphen", "info@domain.com-", "info@domain.com"},
 		{"trailing underscore", "info@domain.com_", "info@domain.com"},
@@ -276,6 +277,18 @@ func Test_filterEmailsBySite(t *testing.T) {
 			expected: []string{"user@gmail.com"},
 		},
 		{
+			name:     "freemail protonmail",
+			siteURL:  "https://somesite.com",
+			emails:   []string{"user@protonmail.com"},
+			expected: []string{"user@protonmail.com"},
+		},
+		{
+			name:     "www site matches apex email domain",
+			siteURL:  "https://www.myfarm.nl",
+			emails:   []string{"info@myfarm.nl"},
+			expected: []string{"info@myfarm.nl"},
+		},
+		{
 			name:     "unrelated domain filtered",
 			siteURL:  "https://myfarm.nl",
 			emails:   []string{"spam@unrelated.com"},
@@ -376,44 +389,44 @@ func Test_getRegistrableDomain(t *testing.T) {
 
 func Test_docEmailExtractor(t *testing.T) {
 	tests := []struct {
-		name      string
-		html      string
-		expected  []string
-		minCount  int
+		name     string
+		html     string
+		expected []string
+		minCount int
 	}{
 		{
-			name: "mailto link",
-			html: `<html><body><a href="mailto:info@myfarm.nl">Email us</a></body></html>`,
+			name:     "mailto link",
+			html:     `<html><body><a href="mailto:info@myfarm.nl">Email us</a></body></html>`,
 			expected: []string{"info@myfarm.nl"},
 		},
 		{
-			name: "email in paragraph",
-			html: `<html><body><p>Contact: info@myfarm.nl</p></body></html>`,
+			name:     "email in paragraph",
+			html:     `<html><body><p>Contact: info@myfarm.nl</p></body></html>`,
 			expected: []string{"info@myfarm.nl"},
 		},
 		{
-			name: "email in footer",
-			html: `<html><body><footer>info@myfarm.nl</footer></body></html>`,
+			name:     "email in footer",
+			html:     `<html><body><footer>info@myfarm.nl</footer></body></html>`,
 			expected: []string{"info@myfarm.nl"},
 		},
 		{
-			name: "email in list item",
-			html: `<html><body><ul><li>info@myfarm.nl</li></ul></body></html>`,
+			name:     "email in list item",
+			html:     `<html><body><ul><li>info@myfarm.nl</li></ul></body></html>`,
 			expected: []string{"info@myfarm.nl"},
 		},
 		{
-			name: "email in table cell",
-			html: `<html><body><table><tr><td>info@myfarm.nl</td></tr></table></body></html>`,
+			name:     "email in table cell",
+			html:     `<html><body><table><tr><td>info@myfarm.nl</td></tr></table></body></html>`,
 			expected: []string{"info@myfarm.nl"},
 		},
 		{
-			name: "obfuscated with [at] [dot]",
-			html: `<html><body><p>info [at] myfarm [dot] nl</p></body></html>`,
+			name:     "obfuscated with [at] [dot]",
+			html:     `<html><body><p>info [at] myfarm [dot] nl</p></body></html>`,
 			expected: []string{"info@myfarm.nl"},
 		},
 		{
-			name: "noreply filtered",
-			html: `<html><body><a href="mailto:noreply@myfarm.nl">No reply</a></body></html>`,
+			name:     "noreply filtered",
+			html:     `<html><body><a href="mailto:noreply@myfarm.nl">No reply</a></body></html>`,
 			expected: nil,
 		},
 		{
@@ -425,8 +438,8 @@ func Test_docEmailExtractor(t *testing.T) {
 			expected: []string{"info@myfarm.nl"},
 		},
 		{
-			name: "email in section",
-			html: `<html><body><section>info@myfarm.nl</section></body></html>`,
+			name:     "email in section",
+			html:     `<html><body><section>info@myfarm.nl</section></body></html>`,
 			expected: []string{"info@myfarm.nl"},
 		},
 		{
@@ -523,8 +536,8 @@ func Test_findContactPageURLs(t *testing.T) {
 			expected: []string{"https://www.myfarm.nl/over-ons"},
 		},
 		{
-			name: "finds by link text",
-			html: `<html><body><a href="/pagina5">Contact</a></body></html>`,
+			name:     "finds by link text",
+			html:     `<html><body><a href="/pagina5">Contact</a></body></html>`,
 			baseURL:  "https://www.myfarm.nl",
 			expected: []string{"https://www.myfarm.nl/pagina5"},
 		},
@@ -559,10 +572,28 @@ func Test_findContactPageURLs(t *testing.T) {
 			expected: nil,
 		},
 		{
-			name: "skips base URL itself",
-			html: `<html><body><a href="https://www.myfarm.nl">Contact us</a></body></html>`,
+			name:     "skips base URL itself",
+			html:     `<html><body><a href="https://www.myfarm.nl">Contact us</a></body></html>`,
 			baseURL:  "https://www.myfarm.nl",
 			expected: nil,
+		},
+		{
+			name:     "allows apex contact from www site",
+			html:     `<html><body><a href="https://myfarm.nl/impressum">Impressum</a></body></html>`,
+			baseURL:  "https://www.myfarm.nl",
+			expected: []string{"https://myfarm.nl/impressum"},
+		},
+		{
+			name:     "ignores about substring false positive",
+			html:     `<html><body><a href="/roundabout">Roundabout</a></body></html>`,
+			baseURL:  "https://www.myfarm.nl",
+			expected: nil,
+		},
+		{
+			name:     "finds imprint link",
+			html:     `<html><body><a href="/imprint">Imprint</a></body></html>`,
+			baseURL:  "https://www.example.com",
+			expected: []string{"https://www.example.com/imprint"},
 		},
 	}
 	for _, tt := range tests {
@@ -577,6 +608,20 @@ func Test_findContactPageURLs(t *testing.T) {
 			}
 		})
 	}
+}
+
+func Test_containsWord(t *testing.T) {
+	assert.True(t, containsWord("contact us", "contact"))
+	assert.True(t, containsWord("impressum", "impressum"))
+	assert.False(t, containsWord("roundabout", "about"))
+	assert.False(t, containsWord("cabotage", "about"))
+}
+
+func Test_sameSiteHost(t *testing.T) {
+	assert.True(t, sameSiteHost("www.myfarm.nl", "myfarm.nl"))
+	assert.True(t, sameSiteHost("shop.myfarm.nl", "www.myfarm.nl"))
+	assert.False(t, sameSiteHost("evil-myfarm.nl", "myfarm.nl"))
+	assert.False(t, sameSiteHost("other.com", "myfarm.nl"))
 }
 
 // --- splitRecipients ---
