@@ -1,11 +1,13 @@
 # Build stage for Playwright dependencies
+# IMPORTANT: scrapemate uses github.com/playwright-community/playwright-go (driver 1.60.0).
+# Installing via mxschmitt/playwright-go installs a different driver version and breaks at runtime.
 FROM ubuntu:22.04 AS playwright-deps
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=UTC
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/browsers
 ENV PLAYWRIGHT_DRIVER_PATH=/opt/ms-playwright-go
 ARG TARGETARCH
-ARG PLAYWRIGHT_GO_VERSION=v0.6100.0
+ARG PLAYWRIGHT_GO_VERSION=v0.6000.0
 
 RUN export PATH=$PATH:/usr/local/go/bin:/root/go/bin \
     && apt-get update \
@@ -18,7 +20,7 @@ RUN export PATH=$PATH:/usr/local/go/bin:/root/go/bin \
     && wget -q "https://go.dev/dl/go1.26.5.linux-${GO_ARCH}.tar.gz" \
     && tar -C /usr/local -xzf "go1.26.5.linux-${GO_ARCH}.tar.gz" \
     && rm "go1.26.5.linux-${GO_ARCH}.tar.gz" \
-    && go install github.com/mxschmitt/playwright-go/cmd/playwright@${PLAYWRIGHT_GO_VERSION} \
+    && go install github.com/playwright-community/playwright-go/cmd/playwright@${PLAYWRIGHT_GO_VERSION} \
     && mkdir -p /opt/browsers \
     && playwright install chromium --with-deps \
     && apt-get clean \

@@ -4,8 +4,9 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/playwright-community/playwright-go"
+
 	"github.com/gosom/google-maps-scraper/runner"
-	"github.com/mxschmitt/playwright-go"
 )
 
 type installer struct {
