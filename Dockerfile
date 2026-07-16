@@ -1,5 +1,7 @@
 # Build stage for Playwright dependencies
-FROM ubuntu:20.04 AS playwright-deps
+FROM ubuntu:22.04 AS playwright-deps
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TZ=UTC
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/browsers
 ENV PLAYWRIGHT_DRIVER_PATH=/opt/ms-playwright-go
 ARG TARGETARCH
@@ -16,11 +18,11 @@ RUN export PATH=$PATH:/usr/local/go/bin:/root/go/bin \
     && wget -q "https://go.dev/dl/go1.26.5.linux-${GO_ARCH}.tar.gz" \
     && tar -C /usr/local -xzf "go1.26.5.linux-${GO_ARCH}.tar.gz" \
     && rm "go1.26.5.linux-${GO_ARCH}.tar.gz" \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/* \
     && go install github.com/mxschmitt/playwright-go/cmd/playwright@${PLAYWRIGHT_GO_VERSION} \
     && mkdir -p /opt/browsers \
-    && playwright install chromium --with-deps
+    && playwright install chromium --with-deps \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
 
 # Build stage
 FROM golang:1.26.5-trixie AS builder
