@@ -17,6 +17,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/gosom/scrapemate"
 	"github.com/mcnijman/go-emailaddress"
+	nethtml "golang.org/x/net/html"
 	"golang.org/x/net/publicsuffix"
 
 	"github.com/gosom/google-maps-scraper/exiter"
@@ -151,15 +152,43 @@ func docEmailExtractor(doc *goquery.Document) []string {
 		}
 	})
 
-	// Check text content of elements that commonly contain emails
+	// Check text content of elements that commonly contain emails.
+	// Use spaced text so adjacent nodes (e.g. phone + email) do not glue together.
 	doc.Find("p, div, span, address, li, td, th, footer, section, header, dd, label, blockquote").Each(func(_ int, s *goquery.Selection) {
-		deob := deobfuscateEmailsText(s.Text())
+		deob := deobfuscateEmailsText(selectionTextSeparated(s))
 		for _, addr := range emailaddress.Find([]byte(deob), false) {
 			add(addr.String())
 		}
 	})
 
 	return emails
+}
+
+// selectionTextSeparated returns the combined text of a selection with a space
+// inserted between text nodes. goquery's Text() concatenates without separators,
+// which can glue phone digits onto email addresses in Impressum-style markup.
+func selectionTextSeparated(s *goquery.Selection) string {
+	var b strings.Builder
+	var walk func(*nethtml.Node)
+	walk = func(n *nethtml.Node) {
+		if n.Type == nethtml.TextNode {
+			if n.Data == "" {
+				return
+			}
+			if b.Len() > 0 {
+				b.WriteByte(' ')
+			}
+			b.WriteString(n.Data)
+			return
+		}
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			walk(c)
+		}
+	}
+	for _, n := range s.Nodes {
+		walk(n)
+	}
+	return b.String()
 }
 
 func regexEmailExtractor(body []byte) []string {
@@ -300,9 +329,10 @@ func normalizeEmail(s string) string {
 }
 
 var (
-	trailingEmailNumsRE = regexp.MustCompile(`(?i)^([a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,})[0-9]+$`)
-	recipientsSplitRE   = regexp.MustCompile(`[;,]`)
-	blockedLocalPartREs = []*regexp.Regexp{
+	trailingEmailNumsRE  = regexp.MustCompile(`(?i)^([a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,})[0-9]+$`)
+	leadingLocalDigitsRE = regexp.MustCompile(`(?i)^(\d{3,})([a-z][a-z0-9._%+-]*@[a-z0-9.-]+\.[a-z]{2,})$`)
+	recipientsSplitRE    = regexp.MustCompile(`[;,]`)
+	blockedLocalPartREs  = []*regexp.Regexp{
 		regexp.MustCompile(`(?i)^no[\-._]?reply$`),
 		regexp.MustCompile(`(?i)^do[\-._]?not[\-._]?reply$`),
 		regexp.MustCompile(`(?i)^donotreply$`),
@@ -329,6 +359,11 @@ func sanitizeEmailInput(s string) string {
 	// Remove trailing numbers after what looks like a valid email (e.g. "info@domain.com123" -> "info@domain.com")
 	if trailingEmailNumsRE.MatchString(s) {
 		s = trailingEmailNumsRE.ReplaceAllString(s, "$1")
+	}
+	// Strip phone-digit prefixes glued onto a letter-starting local part
+	// (e.g. "4401info@domain.de" -> "info@domain.de"). Keeps short prefixes like "24h@".
+	if leadingLocalDigitsRE.MatchString(s) {
+		s = leadingLocalDigitsRE.ReplaceAllString(s, "$2")
 	}
 	// Remove trailing hyphen or underscore that sometimes gets captured
 	s = strings.TrimRight(s, "-_")

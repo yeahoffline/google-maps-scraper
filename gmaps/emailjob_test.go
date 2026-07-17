@@ -33,6 +33,10 @@ func Test_sanitizeEmailInput(t *testing.T) {
 		{"trailing hyphen", "info@domain.com-", "info@domain.com"},
 		{"trailing underscore", "info@domain.com_", "info@domain.com"},
 		{"numbers in local part preserved", "user123@domain.com", "user123@domain.com"},
+		{"leading phone digits stripped", "4401info@groeschel-immobilien.de", "info@groeschel-immobilien.de"},
+		{"leading phone digits before kontakt", "123kontakt@domain.com", "kontakt@domain.com"},
+		{"short numeric prefix preserved", "24h@domain.com", "24h@domain.com"},
+		{"pure numeric local preserved", "12345@domain.com", "12345@domain.com"},
 		{"plus in local part preserved", "user+tag@domain.com", "user+tag@domain.com"},
 		{"whitespace padding", "  info@domain.com  ", "info@domain.com"},
 		{"empty", "", ""},
@@ -441,6 +445,19 @@ func Test_docEmailExtractor(t *testing.T) {
 			name:     "email in section",
 			html:     `<html><body><section>info@myfarm.nl</section></body></html>`,
 			expected: []string{"info@myfarm.nl"},
+		},
+		{
+			name: "phone digits in sibling not glued to email",
+			html: `<html><body><div>
+				<span>Tel. 0821/4401</span>
+				<a href="mailto:info@groeschel-immobilien.de">info@groeschel-immobilien.de</a>
+			</div></body></html>`,
+			expected: []string{"info@groeschel-immobilien.de"},
+		},
+		{
+			name: "same-text-node phone prefix sanitized",
+			html: `<html><body><p>Tel. 0821/4401info@groeschel-immobilien.de</p></body></html>`,
+			expected: []string{"info@groeschel-immobilien.de"},
 		},
 		{
 			name:     "no emails",
